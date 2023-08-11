@@ -201,6 +201,10 @@
 
    Token value for ``":="``.
 
+.. data:: VBARGREATER
+
+   Token value for ``"|>"``.
+
 .. data:: OP
 
 .. data:: AWAIT
