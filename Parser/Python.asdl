@@ -95,7 +95,7 @@ module Python
     boolop = And | Or
 
     operator = Add | Sub | Mult | MatMult | Div | Mod | Pow | LShift
-                 | RShift | BitOr | BitXor | BitAnd | FloorDiv
+                 | RShift | BitOr | BitXor | BitAnd | FloorDiv | CallPipe
 
     unaryop = Invert | Not | UAdd | USub
 

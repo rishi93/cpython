@@ -31,6 +31,8 @@ typedef struct {
     PyObject *BitXor_type;
     PyObject *BoolOp_type;
     PyObject *Break_type;
+    PyObject *CallPipe_singleton;
+    PyObject *CallPipe_type;
     PyObject *Call_type;
     PyObject *ClassDef_type;
     PyObject *Compare_type;
@@ -276,6 +278,8 @@ void _PyAST_Fini()
     Py_CLEAR(state->BitXor_type);
     Py_CLEAR(state->BoolOp_type);
     Py_CLEAR(state->Break_type);
+    Py_CLEAR(state->CallPipe_singleton);
+    Py_CLEAR(state->CallPipe_type);
     Py_CLEAR(state->Call_type);
     Py_CLEAR(state->ClassDef_type);
     Py_CLEAR(state->Compare_type);
@@ -1601,7 +1605,7 @@ static int init_types(astmodulestate *state)
     if (!state->Or_singleton) return 0;
     state->operator_type = make_type(state, "operator", state->AST_type, NULL,
                                      0,
-        "operator = Add | Sub | Mult | MatMult | Div | Mod | Pow | LShift | RShift | BitOr | BitXor | BitAnd | FloorDiv");
+        "operator = Add | Sub | Mult | MatMult | Div | Mod | Pow | LShift | RShift | BitOr | BitXor | BitAnd | FloorDiv | CallPipe");
     if (!state->operator_type) return 0;
     if (!add_attributes(state, state->operator_type, NULL, 0)) return 0;
     state->Add_type = make_type(state, "Add", state->operator_type, NULL, 0,
@@ -1694,6 +1698,14 @@ static int init_types(astmodulestate *state)
                                                   *)state->FloorDiv_type, NULL,
                                                   NULL);
     if (!state->FloorDiv_singleton) return 0;
+    state->CallPipe_type = make_type(state, "CallPipe", state->operator_type,
+                                     NULL, 0,
+        "CallPipe");
+    if (!state->CallPipe_type) return 0;
+    state->CallPipe_singleton = PyType_GenericNew((PyTypeObject
+                                                  *)state->CallPipe_type, NULL,
+                                                  NULL);
+    if (!state->CallPipe_singleton) return 0;
     state->unaryop_type = make_type(state, "unaryop", state->AST_type, NULL, 0,
         "unaryop = Invert | Not | UAdd | USub");
     if (!state->unaryop_type) return 0;
@@ -4478,6 +4490,9 @@ PyObject* ast2obj_operator(astmodulestate *state, operator_ty o)
         case FloorDiv:
             Py_INCREF(state->FloorDiv_singleton);
             return state->FloorDiv_singleton;
+        case CallPipe:
+            Py_INCREF(state->CallPipe_singleton);
+            return state->CallPipe_singleton;
     }
     Py_UNREACHABLE();
 }
@@ -9240,6 +9255,14 @@ obj2ast_operator(astmodulestate *state, PyObject* obj, operator_ty* out,
         *out = FloorDiv;
         return 0;
     }
+    isinstance = PyObject_IsInstance(obj, state->CallPipe_type);
+    if (isinstance == -1) {
+        return 1;
+    }
+    if (isinstance) {
+        *out = CallPipe;
+        return 0;
+    }
 
     PyErr_Format(PyExc_TypeError, "expected some sort of operator, but got %R", obj);
     return 1;
@@ -10672,6 +10695,10 @@ astmodule_exec(PyObject *m)
         return -1;
     }
     Py_INCREF(state->FloorDiv_type);
+    if (PyModule_AddObject(m, "CallPipe", state->CallPipe_type) < 0) {
+        return -1;
+    }
+    Py_INCREF(state->CallPipe_type);
     if (PyModule_AddObject(m, "unaryop", state->unaryop_type) < 0) {
         return -1;
     }
