@@ -9634,7 +9634,7 @@ bitwise_and_raw(Parser *p)
 }
 
 // Left-recursive
-// shift_expr: shift_expr '<<' pipe | shift_expr '>>' pipe | sum
+// shift_expr: shift_expr '<<' pipe | shift_expr '>>' pipe | pipe
 static expr_ty shift_expr_raw(Parser *);
 static expr_ty
 shift_expr_rule(Parser *p)
@@ -9771,24 +9771,24 @@ shift_expr_raw(Parser *p)
         D(fprintf(stderr, "%*c%s shift_expr[%d-%d]: %s failed!\n", p->level, ' ',
                   p->error_indicator ? "ERROR!" : "-", _mark, p->mark, "shift_expr '>>' pipe"));
     }
-    { // sum
+    { // pipe
         if (p->error_indicator) {
             p->level--;
             return NULL;
         }
-        D(fprintf(stderr, "%*c> shift_expr[%d-%d]: %s\n", p->level, ' ', _mark, p->mark, "sum"));
-        expr_ty sum_var;
+        D(fprintf(stderr, "%*c> shift_expr[%d-%d]: %s\n", p->level, ' ', _mark, p->mark, "pipe"));
+        expr_ty pipe_var;
         if (
-            (sum_var = sum_rule(p))  // sum
+            (pipe_var = pipe_rule(p))  // pipe
         )
         {
-            D(fprintf(stderr, "%*c+ shift_expr[%d-%d]: %s succeeded!\n", p->level, ' ', _mark, p->mark, "sum"));
-            _res = sum_var;
+            D(fprintf(stderr, "%*c+ shift_expr[%d-%d]: %s succeeded!\n", p->level, ' ', _mark, p->mark, "pipe"));
+            _res = pipe_var;
             goto done;
         }
         p->mark = _mark;
         D(fprintf(stderr, "%*c%s shift_expr[%d-%d]: %s failed!\n", p->level, ' ',
-                  p->error_indicator ? "ERROR!" : "-", _mark, p->mark, "sum"));
+                  p->error_indicator ? "ERROR!" : "-", _mark, p->mark, "pipe"));
     }
     _res = NULL;
   done:

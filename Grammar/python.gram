@@ -434,7 +434,7 @@ bitwise_and[expr_ty]:
 shift_expr[expr_ty]:
     | a=shift_expr '<<' b=pipe { _Py_BinOp(a, LShift, b, EXTRA) }
     | a=shift_expr '>>' b=pipe { _Py_BinOp(a, RShift, b, EXTRA) }
-    | sum
+    | pipe
 
 pipe[expr_ty]:
     | a=pipe '|>' b=sum { _Py_BinOp(a, CallPipe, b, EXTRA) }

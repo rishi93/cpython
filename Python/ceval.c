@@ -1721,6 +1721,18 @@ main_loop:
             DISPATCH();
         }
 
+        case TARGET(BINARY_PIPED_CALL): {
+            PyObject *right = POP();
+            PyObject *left = TOP();
+            PyObject *res = PyObject_CallOneArg(right, left);
+            Py_DECREF(right);
+            Py_DECREF(left);
+            SET_TOP(res);
+            if (res == NULL)
+                goto error;
+            DISPATCH();
+        }
+
         case TARGET(BINARY_SUBSCR): {
             PyObject *sub = POP();
             PyObject *container = TOP();
