@@ -397,6 +397,10 @@ validate_stmt(stmt_ty stmt)
         return validate_expr(stmt->v.While.test, Load) &&
             validate_body(stmt->v.While.body, "While") &&
             validate_stmts(stmt->v.While.orelse);
+    case Until_kind:
+        return validate_expr(stmt->v.Until.test, Load) &&
+            validate_body(stmt->v.Until.body, "Until") &&
+            validate_stmts(stmt->v.Until.orelse);
     case If_kind:
         return validate_expr(stmt->v.If.test, Load) &&
             validate_body(stmt->v.If.body, "If") &&
