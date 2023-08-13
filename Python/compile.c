@@ -84,7 +84,7 @@ It's called a frame block to distinguish it from a basic block in the
 compiler IR.
 */
 
-enum fblocktype { WHILE_LOOP, FOR_LOOP, TRY_EXCEPT, FINALLY_TRY, FINALLY_END,
+enum fblocktype { WHILE_LOOP, UNTIL_LOOP, FOR_LOOP, TRY_EXCEPT, FINALLY_TRY, FINALLY_END,
                   WITH, ASYNC_WITH, HANDLER_CLEANUP, POP_VALUE, EXCEPTION_HANDLER };
 
 struct fblockinfo {
@@ -1582,6 +1582,10 @@ find_ann(asdl_seq *stmts)
             res = find_ann(st->v.While.body) ||
                   find_ann(st->v.While.orelse);
             break;
+        case Until_kind:
+            res = find_ann(st->v.Until.body) ||
+                  find_ann(st->v.Until.orelse);
+            break;
         case If_kind:
             res = find_ann(st->v.If.body) ||
                   find_ann(st->v.If.orelse);
@@ -1664,6 +1668,7 @@ compiler_unwind_fblock(struct compiler *c, struct fblockinfo *info,
 {
     switch (info->fb_type) {
         case WHILE_LOOP:
+        case UNTIL_LOOP:
         case EXCEPTION_HANDLER:
             return 1;
 
@@ -2615,6 +2620,103 @@ compiler_jump_if(struct compiler *c, expr_ty e, basicblock *next, int cond)
 }
 
 static int
+compiler_jump_if_until(struct compiler *c, expr_ty e, basicblock *next, int cond)
+{
+    switch (e->kind) {
+    case UnaryOp_kind:
+        if (e->v.UnaryOp.op == Not)
+            return compiler_jump_if(c, e->v.UnaryOp.operand, next, !cond);
+        /* fallback to general implementation */
+        break;
+    case BoolOp_kind: {
+        asdl_seq *s = e->v.BoolOp.values;
+        Py_ssize_t i, n = asdl_seq_LEN(s) - 1;
+        assert(n >= 0);
+        int cond2 = e->v.BoolOp.op == Or;
+        basicblock *next2 = next;
+        if (!cond2 != !cond) {
+            next2 = compiler_new_block(c);
+            if (next2 == NULL)
+                return 0;
+        }
+        for (i = 0; i < n; ++i) {
+            if (!compiler_jump_if(c, (expr_ty)asdl_seq_GET(s, i), next2, cond2))
+                return 0;
+        }
+        if (!compiler_jump_if(c, (expr_ty)asdl_seq_GET(s, n), next, cond))
+            return 0;
+        if (next2 != next)
+            compiler_use_next_block(c, next2);
+        return 1;
+    }
+    case IfExp_kind: {
+        basicblock *end, *next2;
+        end = compiler_new_block(c);
+        if (end == NULL)
+            return 0;
+        next2 = compiler_new_block(c);
+        if (next2 == NULL)
+            return 0;
+        if (!compiler_jump_if(c, e->v.IfExp.test, next2, 0))
+            return 0;
+        if (!compiler_jump_if(c, e->v.IfExp.body, next, cond))
+            return 0;
+        ADDOP_JREL(c, JUMP_FORWARD, end);
+        compiler_use_next_block(c, next2);
+        if (!compiler_jump_if(c, e->v.IfExp.orelse, next, cond))
+            return 0;
+        compiler_use_next_block(c, end);
+        return 1;
+    }
+    case Compare_kind: {
+        Py_ssize_t i, n = asdl_seq_LEN(e->v.Compare.ops) - 1;
+        if (n > 0) {
+            if (!check_compare(c, e)) {
+                return 0;
+            }
+            basicblock *cleanup = compiler_new_block(c);
+            if (cleanup == NULL)
+                return 0;
+            VISIT(c, expr, e->v.Compare.left);
+            for (i = 0; i < n; i++) {
+                VISIT(c, expr,
+                    (expr_ty)asdl_seq_GET(e->v.Compare.comparators, i));
+                ADDOP(c, DUP_TOP);
+                ADDOP(c, ROT_THREE);
+                ADDOP_COMPARE(c, asdl_seq_GET(e->v.Compare.ops, i));
+                ADDOP_JABS(c, POP_JUMP_IF_FALSE, cleanup);
+                NEXT_BLOCK(c);
+            }
+            VISIT(c, expr, (expr_ty)asdl_seq_GET(e->v.Compare.comparators, n));
+            ADDOP_COMPARE(c, asdl_seq_GET(e->v.Compare.ops, n));
+            ADDOP_JABS(c, cond ? POP_JUMP_IF_TRUE : POP_JUMP_IF_FALSE, next);
+            basicblock *end = compiler_new_block(c);
+            if (end == NULL)
+                return 0;
+            ADDOP_JREL(c, JUMP_FORWARD, end);
+            compiler_use_next_block(c, cleanup);
+            ADDOP(c, POP_TOP);
+            if (!cond) {
+                ADDOP_JREL(c, JUMP_FORWARD, next);
+            }
+            compiler_use_next_block(c, end);
+            return 1;
+        }
+        /* fallback to general implementation */
+        break;
+    }
+    default:
+        /* fallback to general implementation */
+        break;
+    }
+
+    /* general implementation */
+    VISIT(c, expr, e);
+    ADDOP_JABS(c, cond ? POP_JUMP_IF_FALSE : POP_JUMP_IF_TRUE, next);
+    return 1;
+}
+
+static int
 compiler_ifexp(struct compiler *c, expr_ty e)
 {
     basicblock *end, *next;
@@ -2891,6 +2993,71 @@ compiler_while(struct compiler *c, stmt_ty s)
 
     if (orelse != NULL) /* what if orelse is just pass? */
         VISIT_SEQ(c, stmt, s->v.While.orelse);
+    compiler_use_next_block(c, end);
+
+    return 1;
+}
+
+static int
+compiler_until(struct compiler *c, stmt_ty s)
+{
+    basicblock *loop, *orelse, *end, *anchor = NULL;
+    int constant = expr_constant(s->v.Until.test);
+
+    if (constant == 0) {
+        BEGIN_DO_NOT_EMIT_BYTECODE
+        // Push a dummy block so the VISIT_SEQ knows that we are
+        // inside a while loop so it can correctly evaluate syntax
+        // errors.
+        if (!compiler_push_fblock(c, UNTIL_LOOP, NULL, NULL, NULL)) {
+            return 0;
+        }
+        VISIT_SEQ(c, stmt, s->v.Until.body);
+        // Remove the dummy block now that is not needed.
+        compiler_pop_fblock(c, UNTIL_LOOP, NULL);
+        END_DO_NOT_EMIT_BYTECODE
+        if (s->v.Until.orelse) {
+            VISIT_SEQ(c, stmt, s->v.Until.orelse);
+        }
+        return 1;
+    }
+    loop = compiler_new_block(c);
+    end = compiler_new_block(c);
+    if (constant == -1) {
+        anchor = compiler_new_block(c);
+        if (anchor == NULL)
+            return 0;
+    }
+    if (loop == NULL || end == NULL)
+        return 0;
+    if (s->v.Until.orelse) {
+        orelse = compiler_new_block(c);
+        if (orelse == NULL)
+            return 0;
+    }
+    else
+        orelse = NULL;
+
+    compiler_use_next_block(c, loop);
+    if (!compiler_push_fblock(c, UNTIL_LOOP, loop, end, NULL))
+        return 0;
+    if (constant == -1) {
+        if (!compiler_jump_if_until(c, s->v.Until.test, anchor, 0))
+            return 0;
+    }
+    VISIT_SEQ(c, stmt, s->v.Until.body);
+    ADDOP_JABS(c, JUMP_ABSOLUTE, loop);
+
+    /* XXX should the two POP instructions be in a separate block
+       if there is no else clause ?
+    */
+
+    if (constant == -1)
+        compiler_use_next_block(c, anchor);
+    compiler_pop_fblock(c, UNTIL_LOOP, loop);
+
+    if (orelse != NULL) /* what if orelse is just pass? */
+        VISIT_SEQ(c, stmt, s->v.Until.orelse);
     compiler_use_next_block(c, end);
 
     return 1;
@@ -3415,6 +3582,8 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
         return compiler_for(c, s);
     case While_kind:
         return compiler_while(c, s);
+    case Until_kind:
+        return compiler_until(c, s);
     case If_kind:
         return compiler_if(c, s);
     case Raise_kind:
